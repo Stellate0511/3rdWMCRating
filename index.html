@@ -24,6 +24,21 @@
       --tier-label-width: 154px;
       --tile-width: 176px;
       --tile-height: 99px;
+      --tier-label-pad-y: 12px;
+      --tier-label-pad-x: 8px;
+      --tier-name-size: 18px;
+      --tier-score-size: 14px;
+      --tier-deco-size: 9px;
+      --tier-deco-offset: 9px;
+      --card-number-left: 5px;
+      --card-number-top: 5px;
+      --card-number-min-width: 27px;
+      --card-number-pad-y: 2px;
+      --card-number-pad-x: 5px;
+      --card-number-font-size: 11px;
+      --card-number-border: 4px;
+      --empty-tip-pad: 20px;
+      --empty-tip-font-size: 12px;
     }
 
     * { box-sizing: border-box; }
@@ -163,7 +178,7 @@
       align-items: center;
       justify-content: center;
       min-height: var(--tile-height);
-      padding: 12px 8px;
+      padding: var(--tier-label-pad-y) var(--tier-label-pad-x);
       overflow: hidden;
       border-right: 1px solid #34343d;
       text-align: center;
@@ -172,14 +187,14 @@
     .tier-label::after {
       content: "";
       position: absolute;
-      width: 9px;
-      height: 9px;
+      width: var(--tier-deco-size);
+      height: var(--tier-deco-size);
       background: rgba(255,255,255,.14);
     }
-    .tier-label::before { left: 9px; top: 9px; }
-    .tier-label::after { right: 9px; bottom: 9px; }
-    .tier-name { font-size: 18px; font-weight: 900; line-height: 1.15; }
-    .tier-score { margin-top: 5px; font: 700 14px/1 "IBM Plex Mono", monospace; opacity: .72; }
+    .tier-label::before { left: var(--tier-deco-offset); top: var(--tier-deco-offset); }
+    .tier-label::after { right: var(--tier-deco-offset); bottom: var(--tier-deco-offset); }
+    .tier-name { font-size: var(--tier-name-size); font-weight: 900; line-height: 1.15; }
+    .tier-score { margin-top: calc(var(--tier-name-size) * .28); font: 700 var(--tier-score-size)/1 "IBM Plex Mono", monospace; opacity: .72; }
 
     /* 关键修正：容器始终只有一层高度；空提示绝对定位，不参与高度计算。 */
     .tier-drop-wrap {
@@ -211,9 +226,9 @@
       z-index: 0;
       display: none;
       align-items: center;
-      padding: 0 20px;
+      padding: 0 var(--empty-tip-pad);
       color: #57535b;
-      font: 500 12px/1.4 "IBM Plex Mono", monospace;
+      font: 500 var(--empty-tip-font-size)/1.4 "IBM Plex Mono", monospace;
       pointer-events: none;
     }
     .tier-items:empty + .empty-tip { display: flex; }
@@ -242,14 +257,14 @@
     .work-card::after {
       content: attr(data-number);
       position: absolute;
-      left: 5px;
-      top: 5px;
-      min-width: 27px;
-      padding: 2px 5px 3px;
+      left: var(--card-number-left);
+      top: var(--card-number-top);
+      min-width: var(--card-number-min-width);
+      padding: var(--card-number-pad-y) var(--card-number-pad-x);
       color: #fff;
       background: rgba(8,8,11,.76);
-      border-left: 4px solid var(--accent);
-      font: 700 11px/1.1 "IBM Plex Mono", monospace;
+      border-left: var(--card-number-border) solid var(--accent);
+      font: 700 var(--card-number-font-size)/1.1 "IBM Plex Mono", monospace;
       box-shadow: 2px 2px 0 rgba(0,0,0,.28);
     }
     .work-card:hover { outline: 2px solid var(--accent); outline-offset: -2px; z-index: 2; }
@@ -331,12 +346,9 @@
     #exportCanvas { display: none; }
 
     @media (max-width: 760px) {
-      :root { --tier-label-width: 104px; --tile-width: 144px; --tile-height: 81px; }
       .page { padding: 12px; }
       .header { align-items: flex-start; flex-direction: column; padding: 18px; }
       .header-actions { justify-content: flex-start; }
-      .tier-name { font-size: 14px; }
-      .tier-score { font-size: 12px; }
       .status-bar { align-items: flex-start; flex-direction: column; }
     }
   </style>
@@ -403,6 +415,31 @@
     const STORAGE_KEY = 'third_competition_tier_list_v1';
     const THEME_COLOR = '#f7945f';
 
+    // 修改这里即可同时改变网页与导出图片的“每行目标数量”。
+    const ITEMS_PER_ROW = 10;
+
+    // 正常尺寸；只有当前面板宽度不足以容纳 ITEMS_PER_ROW 张时才同比缩小。
+    const BASE_TIER_SIZE = Object.freeze({
+      labelWidth: 154,
+      tileWidth: 176,
+      tileHeight: 99,
+      labelPadY: 12,
+      labelPadX: 8,
+      nameSize: 18,
+      scoreSize: 14,
+      decoSize: 9,
+      decoOffset: 9,
+      numberLeft: 5,
+      numberTop: 5,
+      numberMinWidth: 27,
+      numberPadY: 2,
+      numberPadX: 5,
+      numberFontSize: 11,
+      numberBorder: 4,
+      emptyPad: 20,
+      emptyFontSize: 12
+    });
+
     const TIERS = [
       { key: '3',  name: '夯',     score: '3',  color: '#f7945f', text: '#1a100c' },
       { key: '2',  name: '顶尖',   score: '2',  color: '#efaa6f', text: '#1a100c' },
@@ -417,10 +454,13 @@
     let items = [];
     let sortables = [];
     let imageObjectUrls = [];
+    let tierResizeFrame = 0;
+    let tierResizeObserver = null;
 
     window.addEventListener('load', async () => {
       if (document.fonts?.ready) await document.fonts.ready;
       await initialize();
+      installResponsiveTierSizing();
     });
 
     async function initialize() {
@@ -443,6 +483,7 @@
 
         document.getElementById('loadingPanel').hidden = true;
         document.getElementById('tierBoard').hidden = false;
+        scheduleTierSizing();
         setStatus(`已读取 ${items.length} 张 JPG；跨 Tier 拖放后会自动按数字排序。`);
       } catch (error) {
         console.error(error);
@@ -452,6 +493,55 @@
         );
         setStatus('读取失败，请检查 manifest 实际请求地址和 JPG 文件名。');
       }
+    }
+
+    function installResponsiveTierSizing() {
+      window.addEventListener('resize', scheduleTierSizing, { passive: true });
+      if ('ResizeObserver' in window) {
+        tierResizeObserver?.disconnect();
+        tierResizeObserver = new ResizeObserver(scheduleTierSizing);
+        const page = document.querySelector('.page');
+        if (page) tierResizeObserver.observe(page);
+      }
+      scheduleTierSizing();
+    }
+
+    function scheduleTierSizing() {
+      cancelAnimationFrame(tierResizeFrame);
+      tierResizeFrame = requestAnimationFrame(updateResponsiveTierSizing);
+    }
+
+    function updateResponsiveTierSizing() {
+      const board = document.getElementById('tierBoard');
+      if (!board || board.hidden || board.clientWidth <= 0) return;
+
+      // 留出 1px 安全量，避免小数取整让最后一张意外换行。
+      const availableWidth = Math.max(1, board.clientWidth - 1);
+      const naturalWidth = BASE_TIER_SIZE.labelWidth + ITEMS_PER_ROW * BASE_TIER_SIZE.tileWidth;
+      const scale = Math.min(1, availableWidth / naturalWidth);
+      const root = document.documentElement.style;
+      const px = value => `${Math.max(0.5, value * scale).toFixed(3)}px`;
+
+      root.setProperty('--tier-label-width', px(BASE_TIER_SIZE.labelWidth));
+      root.setProperty('--tile-width', px(BASE_TIER_SIZE.tileWidth));
+      root.setProperty('--tile-height', px(BASE_TIER_SIZE.tileHeight));
+      root.setProperty('--tier-label-pad-y', px(BASE_TIER_SIZE.labelPadY));
+      root.setProperty('--tier-label-pad-x', px(BASE_TIER_SIZE.labelPadX));
+      root.setProperty('--tier-name-size', px(BASE_TIER_SIZE.nameSize));
+      root.setProperty('--tier-score-size', px(BASE_TIER_SIZE.scoreSize));
+      root.setProperty('--tier-deco-size', px(BASE_TIER_SIZE.decoSize));
+      root.setProperty('--tier-deco-offset', px(BASE_TIER_SIZE.decoOffset));
+      root.setProperty('--card-number-left', px(BASE_TIER_SIZE.numberLeft));
+      root.setProperty('--card-number-top', px(BASE_TIER_SIZE.numberTop));
+      root.setProperty('--card-number-min-width', px(BASE_TIER_SIZE.numberMinWidth));
+      root.setProperty('--card-number-pad-y', px(BASE_TIER_SIZE.numberPadY));
+      root.setProperty('--card-number-pad-x', px(BASE_TIER_SIZE.numberPadX));
+      root.setProperty('--card-number-font-size', px(BASE_TIER_SIZE.numberFontSize));
+      root.setProperty('--card-number-border', px(BASE_TIER_SIZE.numberBorder));
+      root.setProperty('--empty-tip-pad', px(BASE_TIER_SIZE.emptyPad));
+      root.setProperty('--empty-tip-font-size', px(BASE_TIER_SIZE.emptyFontSize));
+
+      board.dataset.tierScale = scale.toFixed(4);
     }
 
     async function reloadImages() {
@@ -569,6 +659,7 @@
         row.append(label, dropWrap);
         board.appendChild(row);
       });
+      scheduleTierSizing();
     }
 
     function createCard(item) {
@@ -783,7 +874,7 @@
       const LABEL_W = 260;
       const OUTER = 40;
       const TOP = 116;
-      const ITEMS_PER_LINE = 10;
+      const ITEMS_PER_LINE = ITEMS_PER_ROW;
       const ROW_GAP = 4;
       const TIER_GAP = 4;
       const canvas = document.getElementById('exportCanvas');
