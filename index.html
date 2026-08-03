@@ -349,7 +349,7 @@
         <div class="sub">拖拽图片到不同等级；同一等级内也可以拖动排序。结果自动保存在本机。</div>
       </div>
       <div class="header-actions">
-        <button class="btn" onclick="reloadImages()">重新读取 /image</button>
+        <button class="btn" onclick="reloadImages()">重新读取 image/</button>
         <button class="btn danger" onclick="resetAll()">全部重置</button>
         <button class="btn" onclick="openScoreExport()">导出评分</button>
         <button class="btn primary" onclick="downloadTierImage()">下载 Tier 图片</button>
@@ -357,13 +357,13 @@
     </header>
 
     <div class="status-bar">
-      <div class="status-left"><span class="status-dot"></span><span id="statusText">正在读取 /image/……</span></div>
+      <div class="status-left"><span class="status-dot"></span><span id="statusText">正在读取 image/……</span></div>
       <span id="itemCount" class="count">0 ITEMS</span>
     </div>
 
     <section id="loadingPanel" class="loading-panel">
       <strong>LOADING IMAGE LIST</strong>
-      正在从固定目录 <code>/image/</code> 读取作品图片。
+      正在从当前网页同级目录 <code>image/</code> 读取作品图片。
     </section>
 
     <section id="tierBoard" class="tier-board" hidden></section>
@@ -394,8 +394,13 @@
   <canvas id="exportCanvas"></canvas>
 
   <script>
-    const IMAGE_BASE = '/image/';
-    const MANIFEST_PATH = '/image/manifest.json';
+    // 使用当前 HTML 所在目录作为基准。
+    // GitHub Pages 项目站点通常位于 /仓库名/ 下，不能使用以 / 开头的域名根路径。
+    const PAGE_BASE_URL = new URL('.', document.baseURI);
+    const IMAGE_BASE_URL = new URL('image/', PAGE_BASE_URL);
+    const MANIFEST_URL = new URL('manifest.json', IMAGE_BASE_URL);
+    const IMAGE_BASE = IMAGE_BASE_URL.href;
+    const MANIFEST_PATH = MANIFEST_URL.href;
     const STORAGE_KEY = 'third_competition_tier_list_v1';
     const THEME_COLOR = '#f7945f';
 
@@ -420,15 +425,15 @@
     });
 
     async function initialize() {
-      setStatus('正在读取固定目录 /image/……');
-      showLoading('LOADING IMAGE LIST', '正在从固定目录 /image/ 读取作品图片。');
+      setStatus('正在读取当前网页同级目录 image/……');
+      showLoading('LOADING IMAGE LIST', '正在从当前网页同级目录 image/ 读取作品图片。');
       try {
         const files = await discoverImageFiles();
         if (!files.length) throw new Error('没有找到符合“数字 编号.jpg”格式的图片。');
         items = files.map(file => ({
           file,
           number: extractNumber(file),
-          src: IMAGE_BASE + encodePath(file)
+          src: new URL(encodePath(file), IMAGE_BASE_URL).href
         })).sort(compareItems);
         buildTierBoard();
         restoreState();
@@ -441,9 +446,9 @@
         console.error(error);
         showLoading(
           'IMAGE LIST NOT FOUND',
-          `${escapeHtml(error.message)}<div class="error-help">页面会先读取 <code>/image/manifest.json</code>，若不存在则解析 <code>/image/</code> 的服务器目录列表。请通过 HTTP 服务器打开网页，不要直接使用 file://。</div>`
+          `${escapeHtml(error.message)}<div class="error-help">当前页面基准地址：<code>${escapeHtml(PAGE_BASE_URL.href)}</code><br>manifest 请求地址：<code>${escapeHtml(MANIFEST_PATH)}</code><br>GitHub Pages 项目站点必须使用仓库相对路径，不能写成域名根路径 <code>/image/</code>。</div>`
         );
-        setStatus('读取失败，请检查 /image/ 目录或 manifest.json。');
+        setStatus('读取失败，请检查页面显示的 manifest 实际请求地址。');
       }
     }
 
@@ -454,17 +459,27 @@
     }
 
     async function discoverImageFiles() {
-      const fromManifest = await tryManifest();
-      if (fromManifest.length) return normalizeDiscoveredFiles(fromManifest);
+      const manifestResult = await tryManifest();
+      if (manifestResult.found) {
+        const files = normalizeDiscoveredFiles(manifestResult.files);
+        if (!files.length) {
+          throw new Error(`已读取 manifest，但其中没有符合“数字 编号.jpg”格式的文件。请求地址：${MANIFEST_PATH}`);
+        }
+        return files;
+      }
 
+      // 只有 manifest 确实为 404 时才尝试目录列表。
+      // GitHub Pages 默认不会生成目录列表，因此部署在 GitHub Pages 时应提供 manifest.json。
       const response = await fetch(IMAGE_BASE, { cache: 'no-store' });
-      if (!response.ok) throw new Error(`无法读取 ${IMAGE_BASE}（HTTP ${response.status}）。`);
+      if (!response.ok) {
+        throw new Error(`manifest 不存在（HTTP 404），且无法读取目录 ${IMAGE_BASE}（HTTP ${response.status}）。`);
+      }
       const html = await response.text();
       const doc = new DOMParser().parseFromString(html, 'text/html');
       const links = [...doc.querySelectorAll('a[href]')];
       const names = links.map(link => {
         try {
-          const url = new URL(link.getAttribute('href'), new URL(IMAGE_BASE, location.href));
+          const url = new URL(link.getAttribute('href'), IMAGE_BASE_URL);
           return decodeURIComponent(url.pathname.split('/').filter(Boolean).pop() || '');
         } catch (_) {
           return '';
@@ -474,16 +489,28 @@
     }
 
     async function tryManifest() {
+      let response;
       try {
-        const response = await fetch(MANIFEST_PATH, { cache: 'no-store' });
-        if (!response.ok) return [];
-        const data = await response.json();
-        if (Array.isArray(data)) return data;
-        if (data && Array.isArray(data.files)) return data.files;
-        return [];
-      } catch (_) {
-        return [];
+        response = await fetch(MANIFEST_PATH, { cache: 'no-store' });
+      } catch (error) {
+        throw new Error(`请求 manifest 失败：${MANIFEST_PATH}。${error.message}`);
       }
+
+      if (response.status === 404) return { found: false, files: [] };
+      if (!response.ok) {
+        throw new Error(`无法读取 manifest：${MANIFEST_PATH}（HTTP ${response.status}）。`);
+      }
+
+      let data;
+      try {
+        data = await response.json();
+      } catch (error) {
+        throw new Error(`manifest 不是有效 JSON：${MANIFEST_PATH}。${error.message}`);
+      }
+
+      if (Array.isArray(data)) return { found: true, files: data };
+      if (data && Array.isArray(data.files)) return { found: true, files: data.files };
+      throw new Error(`manifest 格式不正确：应为字符串数组，或包含 files 数组。请求地址：${MANIFEST_PATH}`);
     }
 
     function normalizeDiscoveredFiles(files) {
