@@ -18,8 +18,6 @@
     :root {
       --accent: #f7945f;
       --bg: #08080b;
-      --panel: #121217;
-      --panel-2: #19191f;
       --line: #303038;
       --text: #f5f3f1;
       --muted: #989198;
@@ -110,7 +108,7 @@
       cursor: pointer;
       font-size: 12px;
       font-weight: 800;
-      transition: transform .15s ease, border-color .15s ease, background .15s ease;
+      transition: transform .15s ease, border-color .15s ease;
     }
     .btn:hover { transform: translate(-1px,-1px); border-color: var(--accent); }
     .btn.primary {
@@ -153,7 +151,7 @@
     .tier-row {
       display: grid;
       grid-template-columns: var(--tier-label-width) minmax(0, 1fr);
-      min-height: calc(var(--tile-height) + 2px);
+      min-height: var(--tile-height);
       border-bottom: 1px solid #34343d;
     }
     .tier-row:last-child { border-bottom: 0; }
@@ -180,19 +178,19 @@
     }
     .tier-label::before { left: 9px; top: 9px; }
     .tier-label::after { right: 9px; bottom: 9px; }
-    .tier-name {
-      font-size: 18px;
-      font-weight: 900;
-      line-height: 1.15;
-      text-shadow: 0 1px 2px rgba(0,0,0,.25);
-    }
-    .tier-score {
-      margin-top: 5px;
-      font: 700 14px/1 "IBM Plex Mono", monospace;
-      opacity: .72;
+    .tier-name { font-size: 18px; font-weight: 900; line-height: 1.15; }
+    .tier-score { margin-top: 5px; font: 700 14px/1 "IBM Plex Mono", monospace; opacity: .72; }
+
+    /* 关键修正：容器始终只有一层高度；空提示绝对定位，不参与高度计算。 */
+    .tier-drop-wrap {
+      position: relative;
+      min-width: 0;
+      min-height: var(--tile-height);
     }
 
     .tier-items {
+      position: relative;
+      z-index: 1;
       display: flex;
       flex-wrap: wrap;
       align-content: flex-start;
@@ -206,6 +204,19 @@
       background-size: 22px 22px;
     }
     .tier-items.drag-over { background-color: rgba(247,148,95,.055); }
+
+    .empty-tip {
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      display: none;
+      align-items: center;
+      padding: 0 20px;
+      color: #57535b;
+      font: 500 12px/1.4 "IBM Plex Mono", monospace;
+      pointer-events: none;
+    }
+    .tier-items:empty + .empty-tip { display: flex; }
 
     .work-card {
       position: relative;
@@ -245,17 +256,6 @@
     .sortable-ghost { opacity: .22; }
     .sortable-drag { outline: 2px solid var(--accent); box-shadow: 8px 8px 0 rgba(247,148,95,.18); }
     .sortable-chosen { filter: brightness(1.08); }
-
-    .empty-tip {
-      display: none;
-      align-items: center;
-      min-height: var(--tile-height);
-      padding: 0 20px;
-      color: #57535b;
-      font: 500 12px/1.4 "IBM Plex Mono", monospace;
-      pointer-events: none;
-    }
-    .tier-items:empty + .empty-tip { display: flex; }
 
     .loading-panel {
       padding: 44px 24px;
@@ -346,7 +346,7 @@
     <header class="header">
       <div class="title-wrap">
         <h1>THIRD <span class="accent">TIER LIST</span></h1>
-        <div class="sub">拖拽图片到不同等级；同一等级内也可以拖动排序。结果自动保存在本机。</div>
+        <div class="sub">拖拽图片到不同等级；每个 Tier 内会始终按数字编号自动排序。</div>
       </div>
       <div class="header-actions">
         <button class="btn" onclick="reloadImages()">重新读取 image/</button>
@@ -363,7 +363,7 @@
 
     <section id="loadingPanel" class="loading-panel">
       <strong>LOADING IMAGE LIST</strong>
-      正在从当前网页同级目录 <code>image/</code> 读取作品图片。
+      正在从当前网页同级目录 <code>image/</code> 读取 JPG 图片。
     </section>
 
     <section id="tierBoard" class="tier-board" hidden></section>
@@ -394,13 +394,12 @@
   <canvas id="exportCanvas"></canvas>
 
   <script>
-    // 使用当前 HTML 所在目录作为基准。
-    // GitHub Pages 项目站点通常位于 /仓库名/ 下，不能使用以 / 开头的域名根路径。
+    // GitHub Pages 项目站点必须使用相对于当前 HTML 的路径，不能使用 /image/。
     const PAGE_BASE_URL = new URL('.', document.baseURI);
     const IMAGE_BASE_URL = new URL('image/', PAGE_BASE_URL);
     const MANIFEST_URL = new URL('manifest.json', IMAGE_BASE_URL);
-    const IMAGE_BASE = IMAGE_BASE_URL.href;
     const MANIFEST_PATH = MANIFEST_URL.href;
+
     const STORAGE_KEY = 'third_competition_tier_list_v1';
     const THEME_COLOR = '#f7945f';
 
@@ -426,7 +425,7 @@
 
     async function initialize() {
       setStatus('正在读取当前网页同级目录 image/……');
-      showLoading('LOADING IMAGE LIST', '正在从当前网页同级目录 image/ 读取作品图片。');
+      showLoading('LOADING IMAGE LIST', '正在读取 JPG 图片。');
       try {
         const files = await discoverImageFiles();
         if (!files.length) throw new Error('没有找到符合“数字 编号.jpg”格式的图片。');
@@ -435,20 +434,23 @@
           number: extractNumber(file),
           src: new URL(encodePath(file), IMAGE_BASE_URL).href
         })).sort(compareItems);
+
         buildTierBoard();
         restoreState();
+        sortAllTierLists();
         initializeSortables();
         updateUI();
+
         document.getElementById('loadingPanel').hidden = true;
         document.getElementById('tierBoard').hidden = false;
-        setStatus(`已读取 ${items.length} 张图片；拖拽结果会自动保存。`);
+        setStatus(`已读取 ${items.length} 张 JPG；跨 Tier 拖放后会自动按数字排序。`);
       } catch (error) {
         console.error(error);
         showLoading(
           'IMAGE LIST NOT FOUND',
-          `${escapeHtml(error.message)}<div class="error-help">当前页面基准地址：<code>${escapeHtml(PAGE_BASE_URL.href)}</code><br>manifest 请求地址：<code>${escapeHtml(MANIFEST_PATH)}</code><br>GitHub Pages 项目站点必须使用仓库相对路径，不能写成域名根路径 <code>/image/</code>。</div>`
+          `${escapeHtml(error.message)}<div class="error-help">当前页面基准地址：<code>${escapeHtml(PAGE_BASE_URL.href)}</code><br>manifest 请求地址：<code>${escapeHtml(MANIFEST_PATH)}</code><br>manifest 中的文件名必须是类似 <code>01 哦.jpg</code> 的 JPG 文件。</div>`
         );
-        setStatus('读取失败，请检查页面显示的 manifest 实际请求地址。');
+        setStatus('读取失败，请检查 manifest 实际请求地址和 JPG 文件名。');
       }
     }
 
@@ -463,21 +465,18 @@
       if (manifestResult.found) {
         const files = normalizeDiscoveredFiles(manifestResult.files);
         if (!files.length) {
-          throw new Error(`已读取 manifest，但其中没有符合“数字 编号.jpg”格式的文件。请求地址：${MANIFEST_PATH}`);
+          throw new Error(`已读取 manifest，但其中没有符合“数字 编号.jpg”格式的文件。`);
         }
         return files;
       }
 
-      // 只有 manifest 确实为 404 时才尝试目录列表。
-      // GitHub Pages 默认不会生成目录列表，因此部署在 GitHub Pages 时应提供 manifest.json。
-      const response = await fetch(IMAGE_BASE, { cache: 'no-store' });
+      const response = await fetch(IMAGE_BASE_URL.href, { cache: 'no-store' });
       if (!response.ok) {
-        throw new Error(`manifest 不存在（HTTP 404），且无法读取目录 ${IMAGE_BASE}（HTTP ${response.status}）。`);
+        throw new Error(`manifest 不存在（HTTP 404），且无法读取目录 ${IMAGE_BASE_URL.href}（HTTP ${response.status}）。`);
       }
       const html = await response.text();
       const doc = new DOMParser().parseFromString(html, 'text/html');
-      const links = [...doc.querySelectorAll('a[href]')];
-      const names = links.map(link => {
+      const names = [...doc.querySelectorAll('a[href]')].map(link => {
         try {
           const url = new URL(link.getAttribute('href'), IMAGE_BASE_URL);
           return decodeURIComponent(url.pathname.split('/').filter(Boolean).pop() || '');
@@ -493,24 +492,22 @@
       try {
         response = await fetch(MANIFEST_PATH, { cache: 'no-store' });
       } catch (error) {
-        throw new Error(`请求 manifest 失败：${MANIFEST_PATH}。${error.message}`);
+        throw new Error(`请求 manifest 失败：${error.message}`);
       }
 
       if (response.status === 404) return { found: false, files: [] };
-      if (!response.ok) {
-        throw new Error(`无法读取 manifest：${MANIFEST_PATH}（HTTP ${response.status}）。`);
-      }
+      if (!response.ok) throw new Error(`无法读取 manifest（HTTP ${response.status}）。`);
 
       let data;
       try {
         data = await response.json();
       } catch (error) {
-        throw new Error(`manifest 不是有效 JSON：${MANIFEST_PATH}。${error.message}`);
+        throw new Error(`manifest 不是有效 JSON：${error.message}`);
       }
 
       if (Array.isArray(data)) return { found: true, files: data };
       if (data && Array.isArray(data.files)) return { found: true, files: data.files };
-      throw new Error(`manifest 格式不正确：应为字符串数组，或包含 files 数组。请求地址：${MANIFEST_PATH}`);
+      throw new Error('manifest 格式不正确：应为字符串数组，或包含 files 数组。');
     }
 
     function normalizeDiscoveredFiles(files) {
@@ -525,10 +522,7 @@
           seen.add(key);
           return true;
         })
-        .sort((a,b) => {
-          const na = extractNumber(a), nb = extractNumber(b);
-          return na - nb || a.localeCompare(b, 'zh-CN', { numeric: true });
-        });
+        .sort((a,b) => extractNumber(a) - extractNumber(b) || a.localeCompare(b, 'zh-CN', { numeric: true }));
     }
 
     function extractNumber(file) {
@@ -547,6 +541,7 @@
     function buildTierBoard() {
       const board = document.getElementById('tierBoard');
       board.innerHTML = '';
+
       TIERS.forEach(tier => {
         const row = document.createElement('div');
         row.className = 'tier-row';
@@ -559,8 +554,7 @@
         label.innerHTML = `<div class="tier-name">${tier.name}</div><div class="tier-score">(${tier.score})</div>`;
 
         const dropWrap = document.createElement('div');
-        dropWrap.style.display = 'grid';
-        dropWrap.style.gridTemplateColumns = 'minmax(0,1fr)';
+        dropWrap.className = 'tier-drop-wrap';
 
         const list = document.createElement('div');
         list.className = 'tier-items';
@@ -602,11 +596,18 @@
       const validFiles = new Set(items.map(item => item.file));
       const placed = new Set();
 
-      if (saved && saved.tiers) {
+      if (saved?.tiers) {
         TIERS.forEach(tier => {
           const list = getTierList(tier.key);
           const files = Array.isArray(saved.tiers[tier.key]) ? saved.tiers[tier.key] : [];
-          files.forEach(file => {
+          files.forEach(savedFile => {
+            // 兼容旧版 PNG 保存结果：同名文件改成 JPG 后自动迁移。
+            let file = savedFile;
+            if (!validFiles.has(file)) {
+              const jpgCandidate = String(savedFile).replace(/\.(png|jpeg)$/i, '.jpg');
+              const matched = items.find(entry => entry.file.toLowerCase() === jpgCandidate.toLowerCase());
+              if (matched) file = matched.file;
+            }
             if (!validFiles.has(file) || placed.has(file)) return;
             const item = items.find(entry => entry.file === file);
             if (item) {
@@ -623,23 +624,31 @@
 
     function initializeSortables() {
       destroySortables();
+
       document.querySelectorAll('.tier-items').forEach(list => {
         const sortable = new Sortable(list, {
           group: 'tier-list',
+          sort: false, // 禁止同一 Tier 内手动排序
           animation: 155,
           ghostClass: 'sortable-ghost',
           chosenClass: 'sortable-chosen',
           dragClass: 'sortable-drag',
           fallbackOnBody: true,
           swapThreshold: .62,
-          onStart: () => list.classList.add('drag-over'),
-          onEnd: event => {
+          onMove: event => {
+            // 同一个 Tier 内拖动不改变位置；只允许跨 Tier。
+            if (event.from === event.to) return false;
+            return true;
+          },
+          onAdd: event => {
+            sortTierList(event.to);
+          },
+          onEnd: () => {
             document.querySelectorAll('.tier-items').forEach(el => el.classList.remove('drag-over'));
+            sortAllTierLists();
             saveState();
             updateUI();
-          },
-          onAdd: () => list.classList.add('drag-over'),
-          onUnchoose: () => list.classList.remove('drag-over')
+          }
         });
         sortables.push(sortable);
       });
@@ -648,6 +657,20 @@
     function destroySortables() {
       sortables.forEach(sortable => sortable.destroy());
       sortables = [];
+    }
+
+    function sortTierList(list) {
+      const cards = [...list.querySelectorAll('.work-card')];
+      cards.sort((a,b) => {
+        const na = Number(a.dataset.number);
+        const nb = Number(b.dataset.number);
+        return na - nb || a.dataset.file.localeCompare(b.dataset.file, 'zh-CN', { numeric: true });
+      });
+      cards.forEach(card => list.appendChild(card));
+    }
+
+    function sortAllTierLists() {
+      document.querySelectorAll('.tier-items').forEach(sortTierList);
     }
 
     function getTierList(key) {
@@ -659,11 +682,12 @@
     }
 
     function collectState() {
+      sortAllTierLists();
       const tiers = {};
       TIERS.forEach(tier => {
         tiers[tier.key] = [...getTierList(tier.key).querySelectorAll('.work-card')].map(card => card.dataset.file);
       });
-      return { version: 1, tiers, updatedAt: new Date().toISOString() };
+      return { version: 2, tiers, updatedAt: new Date().toISOString() };
     }
 
     function saveState() {
@@ -688,17 +712,14 @@
       if (!confirm('确认把所有作品移回“未评价（X）”并清除已保存结果吗？')) return;
       const unranked = getTierList('X');
       items.slice().sort(compareItems).forEach(item => {
-        const card = document.querySelector(`.work-card[data-file="${attributeEscape(item.file)}"]`);
+        const card = [...document.querySelectorAll('.work-card')].find(el => el.dataset.file === item.file);
         if (card) unranked.appendChild(card);
       });
+      sortAllTierLists();
       localStorage.removeItem(STORAGE_KEY);
       saveState();
       updateUI();
       setStatus('已重置，所有作品均回到未评价（X）。');
-    }
-
-    function attributeEscape(value) {
-      return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
     }
 
     function updateUI() {
@@ -749,7 +770,9 @@
 
     async function downloadTierImage() {
       if (!items.length) return;
+      sortAllTierLists();
       setStatus('正在生成固定尺寸 Tier 图片……');
+
       const exportData = TIERS.map(tier => ({
         ...tier,
         files: [...getTierList(tier.key).querySelectorAll('.work-card')].map(card => card.dataset.file)
@@ -765,7 +788,10 @@
       const TIER_GAP = 4;
       const canvas = document.getElementById('exportCanvas');
       const exportCtx = canvas.getContext('2d');
-      const tierHeights = exportData.map(tier => Math.max(1, Math.ceil(tier.files.length / ITEMS_PER_LINE)) * TILE_H + Math.max(0, Math.ceil(tier.files.length / ITEMS_PER_LINE)-1) * ROW_GAP);
+      const tierHeights = exportData.map(tier => {
+        const lines = Math.max(1, Math.ceil(tier.files.length / ITEMS_PER_LINE));
+        return lines * TILE_H + (lines - 1) * ROW_GAP;
+      });
       const width = OUTER * 2 + LABEL_W + ITEMS_PER_LINE * TILE_W;
       const height = TOP + OUTER + tierHeights.reduce((sum,h) => sum+h,0) + TIER_GAP * (TIERS.length-1);
       canvas.width = width;
@@ -785,10 +811,12 @@
 
       const imageCache = await preloadExportImages(items);
       let y = TOP;
+
       exportData.forEach((tier,tierIndex) => {
         const tierH = tierHeights[tierIndex];
         const labelX = OUTER;
         const itemsX = OUTER + LABEL_W;
+
         exportCtx.fillStyle = tier.color;
         exportCtx.fillRect(labelX,y,LABEL_W,tierH);
         exportCtx.fillStyle = tier.text;
@@ -860,6 +888,7 @@
       imageObjectUrls.forEach(url => URL.revokeObjectURL(url));
       imageObjectUrls = [];
       const map = new Map();
+
       await Promise.all(sourceItems.map(async item => {
         try {
           const response = await fetch(item.src, { cache: 'force-cache' });
